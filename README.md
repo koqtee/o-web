@@ -1,2 +1,2 @@
 # o-web
-https://github-username.github.io/o-web/cv
+https://koqtee.github.io/o-web/cv
