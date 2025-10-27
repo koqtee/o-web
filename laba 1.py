@@ -108,6 +108,7 @@ def build_system_matrix(h, G_theta, X, Y, L, angle_deg=120):
 def solve_poisson_detailed(h, epsilon, G_theta, L, angle_deg=120):
     """
     Решает уравнение Пуассона в равнобедренном треугольнике.
+    Уравнение: Δφ = -2Gθ
     """
     # Параметры треугольника
     angle_rad = radians(angle_deg)
@@ -160,6 +161,7 @@ def solve_poisson_detailed(h, epsilon, G_theta, L, angle_deg=120):
     print(f"\n3. ИТЕРАЦИОННЫЙ ПРОЦЕСС (метод простой итерации):")
     print(f"   Критерий сходимости: max|φ_new - φ_old| < ε = {epsilon}")
     print(f"   Максимальное число итераций: 10000")
+    print(f"   Уравнение Пуассона: Δφ = -2Gθ = -{2*G_theta}")
     print(f"   Формула обновления для внутреннего узла (i,j):")
     print(f"        φ[i,j] = 0.25 * (φ[i+1,j] + φ[i-1,j] + φ[i,j+1] + φ[i,j-1] + h² * 2 * Gθ)")
     print(f"   (Применяется только внутри треугольника)")
@@ -273,30 +275,66 @@ def plot_triangle(A, B, C, ax, color='blue', linewidth=2):
     vertices = np.array([A, B, C, A])  # Замыкаем треугольник
     ax.plot(vertices[:, 0], vertices[:, 1], color=color, linewidth=linewidth)
 
+def get_triangle_grid_points(h, L, angle_deg=120):
+    """
+    Генерирует точки сетки, которые попадают внутрь треугольника.
+    """
+    angle_rad = radians(angle_deg)
+    height = 2 * sin(angle_rad/2)
+    
+    A = (0, 0)
+    B = (L, 0)
+    C = (L/2, height)
+    
+    # Создаем регулярную сетку
+    nx = int(L / h) + 1
+    ny = int(height / h) + 1
+    x = np.linspace(0, L, nx)
+    y = np.linspace(0, height, ny)
+    X, Y = np.meshgrid(x, y)
+    
+    # Фильтруем точки внутри треугольника
+    triangle_points_x = []
+    triangle_points_y = []
+    
+    for j in range(ny):
+        for i in range(nx):
+            if is_point_in_triangle(X[j, i], Y[j, i], A, B, C):
+                triangle_points_x.append(X[j, i])
+                triangle_points_y.append(Y[j, i])
+    
+    return triangle_points_x, triangle_points_y, A, B, C
+
 # --- ОСНОВНОЕ ВЫПОЛНЕНИЕ ---
 
-# Параметры из условия
-G_theta = 6.0  # Параметр Gθ = 6
-L = 2.0        # Основание треугольника
-angle_deg = 120 # Угол при вершине
+# Параметры из картинки
+G_theta = 6.0    # Gθ = 6
+L = 2.0          # Основание треугольника L = 2
+angle_deg = 120  # Угол при вершине 120°
 epsilon = 0.1
 
 # Вычисляем высоту треугольника
 angle_rad = radians(angle_deg)
 height = 2 * sin(angle_rad/2)
 
-print("=" * 60)
+print("=" * 70)
 print("РЕШЕНИЕ УРАВНЕНИЯ ПУАССОНА В РАВНОБЕДРЕННОМ ТРЕУГОЛЬНИКЕ")
-print("=" * 60)
-print(f"Параметры задачи:")
+print("ПО УСЛОВИЯМ С КАРТИНКИ")
+print("=" * 70)
+print(f"ПАРАМЕТРЫ ЗАДАЧИ:")
 print(f"  - Gθ = {G_theta}")
 print(f"  - Основание треугольника L = {L}")
 print(f"  - Боковые стороны = 2")
 print(f"  - Угол при вершине = {angle_deg}°")
 print(f"  - Высота треугольника = {height:.3f}")
+print(f"  - Уравнение: Δφ = -2Gθ = -{2*G_theta}")
+print(f"  - Граничные условия: φ = 0 на всей границе треугольника")
 print(f"  - Точность ε = {epsilon}")
 
 # --- Решение с шагом h = 0.5 ---
+print("\n" + "="*50)
+print("РЕШЕНИЕ ДЛЯ h = 0.5")
+print("="*50)
 X1, Y1, phi1, iter1, iteration_data1, y1, nx1, x1, A, B, C = solve_poisson_detailed(
     0.5, epsilon, G_theta, L, angle_deg)
 
@@ -304,6 +342,9 @@ X1, Y1, phi1, iter1, iteration_data1, y1, nx1, x1, A, B, C = solve_poisson_detai
 A_matrix, b, node_to_index = build_system_matrix(0.5, G_theta, X1, Y1, L, angle_deg)
 
 # --- Решение с шагом h = 0.25 ---
+print("\n" + "="*50)
+print("РЕШЕНИЕ ДЛЯ h = 0.25")
+print("="*50)
 X2, Y2, phi2, iter2, iteration_data2, y2, nx2, x2, A2, B2, C2 = solve_poisson_detailed(
     0.25, epsilon, G_theta, L, angle_deg)
 
@@ -316,11 +357,15 @@ plt.figure(figsize=(18, 14))
 # График 1: Область (треугольник) и сетка (h=0.5)
 plt.subplot(2, 3, 1)
 plot_triangle(A, B, C, plt.gca(), color='blue', linewidth=3)
-plt.scatter(X1, Y1, color='gray', s=20, marker='o', label='Узлы сетки', alpha=0.6)
+
+# Получаем точки сетки внутри треугольника для h=0.5
+triangle_points_x1, triangle_points_y1, A, B, C = get_triangle_grid_points(0.5, L, angle_deg)
+plt.scatter(triangle_points_x1, triangle_points_y1, color='red', s=30, marker='o', 
+           label=f'Узлы сетки (h=0.5)\nВсего: {len(triangle_points_x1)} узлов')
 
 # Закрашиваем внутреннюю область треугольника
 triangle_points = np.array([A, B, C])
-plt.fill(triangle_points[:, 0], triangle_points[:, 1], 'lightblue', alpha=0.4)
+plt.fill(triangle_points[:, 0], triangle_points[:, 1], 'lightblue', alpha=0.3)
 
 plt.title(f'Равнобедренный треугольник и сетка (h=0.5)\nL={L}, стороны=2, угол={angle_deg}°', fontsize=12)
 plt.xlabel('x')
@@ -329,7 +374,7 @@ plt.legend()
 plt.grid(True, alpha=0.3)
 plt.axis('equal')
 
-# График 2: Решение для h = 0.5
+# График 2: Решение для h = 0.5 с отображением узлов
 plt.subplot(2, 3, 2)
 # Создаем маску для треугольника
 mask_triangle = np.zeros_like(phi1, dtype=bool)
@@ -339,7 +384,18 @@ for j in range(phi1.shape[0]):
 
 # Отображаем только значения внутри треугольника
 phi1_masked = np.ma.masked_where(~mask_triangle, phi1)
-contour1 = plt.contourf(X1, Y1, phi1_masked, levels=20, cmap='viridis')
+contour1 = plt.contourf(X1, Y1, phi1_masked, levels=20, cmap='viridis', alpha=0.7)
+
+# Отображаем узлы сетки с значениями
+for j in range(phi1.shape[0]):
+    for i in range(phi1.shape[1]):
+        if mask_triangle[j, i]:
+            plt.scatter(X1[j, i], Y1[j, i], color='white', s=20, alpha=0.6)
+            # Подписываем значения в узлах (только для некоторых узлов чтобы не загромождать)
+            if i % 2 == 0 and j % 2 == 0:  # Каждый второй узел
+                plt.text(X1[j, i], Y1[j, i], f'{phi1[j, i]:.2f}', 
+                        fontsize=6, ha='center', va='center', color='black')
+
 plt.colorbar(contour1, label='φ(x, y)')
 plot_triangle(A, B, C, plt.gca(), color='black', linewidth=2)
 plt.title(f'Решение φ(x,y) для h = 0.5\n(Итераций: {iter1})', fontsize=12)
@@ -357,6 +413,13 @@ for j in range(phi2.shape[0]):
 phi2_masked = np.ma.masked_where(~mask_triangle2, phi2)
 contour2 = plt.contourf(X2, Y2, phi2_masked, levels=20, cmap='viridis')
 plt.colorbar(contour2, label='φ(x, y)')
+
+# Отображаем узлы сетки для h=0.25 (только часть чтобы не загромождать)
+for j in range(0, phi2.shape[0], 4):  # Каждый 4-й узел
+    for i in range(0, phi2.shape[1], 4):
+        if mask_triangle2[j, i]:
+            plt.scatter(X2[j, i], Y2[j, i], color='white', s=10, alpha=0.4)
+
 plot_triangle(A, B, C, plt.gca(), color='black', linewidth=2)
 plt.title(f'Решение φ(x,y) для h = 0.25\n(Итераций: {iter2})', fontsize=12)
 plt.xlabel('x')
@@ -377,6 +440,10 @@ if comparison_df is not None:
     
     im = plt.contourf(X1, Y1, Z_diff, levels=20, cmap='hot')
     plt.colorbar(im, label='|Δφ|')
+    
+    # Отображаем узлы сетки
+    plt.scatter(triangle_points_x1, triangle_points_y1, color='white', s=10, alpha=0.6)
+    
     plot_triangle(A, B, C, plt.gca(), color='black', linewidth=2)
     plt.title(f'Абсолютная разность |φ_h=0.5 - φ_h=0.25|\nМакс. = {max_diff:.4f}', fontsize=12)
     plt.xlabel('x')
@@ -388,8 +455,13 @@ else:
 # График 5: Область (треугольник) и сетка (h=0.25)
 plt.subplot(2, 3, 5)
 plot_triangle(A, B, C, plt.gca(), color='blue', linewidth=3)
-plt.scatter(X2, Y2, color='gray', s=10, marker='o', label='Узлы сетки', alpha=0.6)
-plt.fill(triangle_points[:, 0], triangle_points[:, 1], 'lightblue', alpha=0.4)
+
+# Получаем точки сетки внутри треугольника для h=0.25
+triangle_points_x2, triangle_points_y2, A, B, C = get_triangle_grid_points(0.25, L, angle_deg)
+plt.scatter(triangle_points_x2, triangle_points_y2, color='green', s=15, marker='o', 
+           label=f'Узлы сетки (h=0.25)\nВсего: {len(triangle_points_x2)} узлов', alpha=0.6)
+
+plt.fill(triangle_points[:, 0], triangle_points[:, 1], 'lightgreen', alpha=0.3)
 plt.title(f'Равнобедренный треугольник и сетка (h=0.25)\nL={L}, стороны=2, угол={angle_deg}°', fontsize=12)
 plt.xlabel('x')
 plt.ylabel('y')
@@ -415,9 +487,9 @@ for phi_next in iteration_data2[1:]:
     diffs_h2.append(diff)
     phi_prev = phi_next
 
-plt.semilogy(range(1, len(diffs_h1)+1), diffs_h1, 'b-', label=f'h=0.5 (итераций: {len(diffs_h1)})')
-plt.semilogy(range(1, len(diffs_h2)+1), diffs_h2, 'r--', label=f'h=0.25 (итераций: {len(diffs_h2)})')
-plt.axhline(y=epsilon, color='green', linestyle='--', label=f'Точность ε={epsilon}')
+plt.semilogy(range(1, len(diffs_h1)+1), diffs_h1, 'b-', label=f'h=0.5 (итераций: {len(diffs_h1)})', linewidth=2)
+plt.semilogy(range(1, len(diffs_h2)+1), diffs_h2, 'r--', label=f'h=0.25 (итераций: {len(diffs_h2)})', linewidth=2)
+plt.axhline(y=epsilon, color='green', linestyle='--', label=f'Точность ε={epsilon}', linewidth=2)
 plt.xlabel('Номер итерации')
 plt.ylabel('Макс. |Δφ|')
 plt.title('Сходимость метода (логарифмическая шкала)', fontsize=12)
@@ -427,15 +499,58 @@ plt.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()
 
+# --- ДОПОЛНИТЕЛЬНАЯ ВИЗУАЛИЗАЦИЯ: ТОЛЬКО УЗЛЫ СЕТКИ ---
+plt.figure(figsize=(15, 5))
+
+# Сетка h=0.5
+plt.subplot(1, 3, 1)
+plot_triangle(A, B, C, plt.gca(), color='black', linewidth=2)
+plt.scatter(triangle_points_x1, triangle_points_y1, color='red', s=50, marker='o')
+for i, (x, y) in enumerate(zip(triangle_points_x1, triangle_points_y1)):
+    plt.text(x, y, f'({x:.1f},{y:.1f})', fontsize=6, ha='right', va='bottom')
+plt.title(f'Узлы сетки внутри треугольника (h=0.5)\nВсего узлов: {len(triangle_points_x1)}')
+plt.xlabel('x')
+plt.ylabel('y')
+plt.grid(True, alpha=0.3)
+plt.axis('equal')
+
+# Сетка h=0.25
+plt.subplot(1, 3, 2)
+plot_triangle(A, B, C, plt.gca(), color='black', linewidth=2)
+plt.scatter(triangle_points_x2, triangle_points_y2, color='blue', s=30, marker='o', alpha=0.7)
+plt.title(f'Узлы сетки внутри треугольника (h=0.25)\nВсего узлов: {len(triangle_points_x2)}')
+plt.xlabel('x')
+plt.ylabel('y')
+plt.grid(True, alpha=0.3)
+plt.axis('equal')
+
+# Сравнение сеток
+plt.subplot(1, 3, 3)
+plot_triangle(A, B, C, plt.gca(), color='black', linewidth=3)
+plt.scatter(triangle_points_x1, triangle_points_y1, color='red', s=50, marker='o', label='h=0.5')
+plt.scatter(triangle_points_x2, triangle_points_y2, color='blue', s=20, marker='s', alpha=0.6, label='h=0.25')
+plt.title('Сравнение сеток h=0.5 и h=0.25')
+plt.xlabel('x')
+plt.ylabel('y')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.axis('equal')
+
+plt.tight_layout()
+plt.show()
+
 # --- ИТОГОВЫЙ АНАЛИЗ И ВЫВОДЫ ---
-print(f"\n" + "="*60)
+print(f"\n" + "="*70)
 print("ИТОГОВЫЙ АНАЛИЗ")
-print("="*60)
+print("="*70)
 
 print(f"\nКоличество итераций:")
 print(f"   - Для h = 0.5: {iter1} итераций")
 print(f"   - Для h = 0.25: {iter2} итераций")
-print("   Вывод: Уменьшение шага привело к увеличению числа итераций, что ожидаемо из-за роста числа узлов.")
+
+print(f"\nКоличество узлов сетки внутри треугольника:")
+print(f"   - Для h = 0.5: {len(triangle_points_x1)} узлов")
+print(f"   - Для h = 0.25: {len(triangle_points_x2)} узлов")
 
 if comparison_df is not None:
     print(f"\nТочность решения:")
@@ -467,18 +582,7 @@ if triangle_phi1 and triangle_phi2:
     print(f"   - Для h=0.5: φ ∈ [{phi1_min:.4f}, {phi1_max:.4f}]")
     print(f"   - Для h=0.25: φ ∈ [{phi2_min:.4f}, {phi2_max:.4f}]")
 
-print(f"\n   Значения функции φ(x,y) в узлах сетки (h=0.5) внутри треугольника:")
-print("      x: ", end="")
-for i in range(nx1):
-    print(f"{x1[i]:5.1f} ", end="")
-print()
-for j in range(len(y1)-1, -1, -1):
-    print(f"y={y1[j]:4.1f}: ", end="")
-    for i in range(nx1):
-        if is_point_in_triangle(X1[j, i], Y1[j, i], A, B, C):
-            print(f"{phi1[j, i]:5.3f} ", end="")
-        else:
-            print("     - ", end="")
-    print()
-
-print(f"\nРЕШЕНИЕ ЗАДАЧИ ДЛЯ РАВНОБЕДРЕННОГО ТРЕУГОЛЬНИКА ЗАВЕРШЕНО")
+print(f"\n" + "="*70)
+print("РЕШЕНИЕ ЗАДАЧИ ДЛЯ РАВНОБЕДРЕННОГО ТРЕУГОЛЬНИКА ЗАВЕРШЕНО")
+print("ПАРАМЕТРЫ: Gθ = 6, L = 2, угол = 120°, стороны = 2")
+print("="*70)
