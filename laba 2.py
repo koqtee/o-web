@@ -1,499 +1,431 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from math import sqrt, sin, cos, radians
+from math import cos, sin, radians, sqrt
 
-def find_internal_nodes_for_triangle(X, Y, L, angle_deg=120):
-    """
-    Находит индексы внутренних узлов, лежащих внутри равнобедренного треугольника.
-    Треугольник: основание L, боковые стороны = 2, угол при вершине = 120°.
-    Возвращает список кортежей (i, j) и словарь node_to_index для нумерации.
-    """
-    ny, nx = X.shape
-    internal_nodes = []
+# Функция для проверки принадлежности точки треугольнику (вынесена на верхний уровень)
+def point_in_triangle(x, y, A, B, C):
+    """Проверяет, лежит ли точка внутри треугольника ABC"""
+    # Векторы
+    v0 = [C[0] - A[0], C[1] - A[1]]
+    v1 = [B[0] - A[0], B[1] - A[1]]
+    v2 = [x - A[0], y - A[1]]
     
-    # Параметры треугольника
-    angle_rad = radians(angle_deg)
-    height = 2 * sin(angle_rad/2)  # Высота треугольника
-    
-    # Координаты вершин
-    A = (0, 0)           # Левая нижняя вершина
-    B = (L, 0)           # Правая нижняя вершина  
-    C = (L/2, height)    # Верхняя вершина
-    
-    for j in range(1, ny-1):  # исключаем граничные строки
-        for i in range(1, nx-1):  # исключаем граничные столбцы
-            x, y = X[j, i], Y[j, i]
-            
-            # Проверка, находится ли точка внутри треугольника
-            if is_point_in_triangle(x, y, A, B, C):
-                internal_nodes.append((i, j))
-    
-    # Создаем словарь: (i, j) -> глобальный индекс
-    node_to_index = {node: idx for idx, node in enumerate(internal_nodes)}
-    return internal_nodes, node_to_index
-
-def is_point_in_triangle(x, y, A, B, C):
-    """
-    Проверяет, находится ли точка (x,y) внутри треугольника ABC
-    используя метод барицентрических координат.
-    """
-    x1, y1 = A
-    x2, y2 = B  
-    x3, y3 = C
+    # Вычисляем dot products
+    dot00 = v0[0]*v0[0] + v0[1]*v0[1]
+    dot01 = v0[0]*v1[0] + v0[1]*v1[1]
+    dot02 = v0[0]*v2[0] + v0[1]*v2[1]
+    dot11 = v1[0]*v1[0] + v1[1]*v1[1]
+    dot12 = v1[0]*v2[0] + v1[1]*v2[1]
     
     # Вычисляем барицентрические координаты
-    denom = (y2 - y3)*(x1 - x3) + (x3 - x2)*(y1 - y3)
-    if abs(denom) < 1e-12:
-        return False
-        
-    alpha = ((y2 - y3)*(x - x3) + (x3 - x2)*(y - y3)) / denom
-    beta = ((y3 - y1)*(x - x3) + (x1 - x3)*(y - y3)) / denom
-    gamma = 1 - alpha - beta
+    inv_denom = 1.0 / (dot00 * dot11 - dot01 * dot01)
+    u = (dot11 * dot02 - dot01 * dot12) * inv_denom
+    v = (dot00 * dot12 - dot01 * dot02) * inv_denom
     
-    # Точка внутри треугольника, если все координаты между 0 и 1
-    return 0 <= alpha <= 1 and 0 <= beta <= 1 and 0 <= gamma <= 1
+    # Проверяем, находится ли точка внутри треугольника
+    return (u >= 0) and (v >= 0) and (u + v <= 1)
 
-def build_system_matrix(h, G_theta, X, Y, L, angle_deg=120):
+def solve_poisson_obtuse_triangle(h, epsilon, G_theta=6):
     """
-    Строит матрицу A и вектор b для системы A * Phi = b.
-    Узлы нумеруются только среди внутренних точек треугольника.
+    Решает уравнение Пуассона в тупоугольном треугольнике 
+    с двумя сторонами по 2 и углом 120° между ними
     """
-    print(f"\n6. ПОСТРОЕНИЕ СИСТЕМЫ ЛИНЕЙНЫХ УРАВНЕНИЙ (для h={h}):")
-    print("   Для внутренних узлов используется шаблон 'крест':")
-    print("        φ[i,j] = 1/4 * (φ[i+1,j] + φ[i-1,j] + φ[i,j+1] + φ[i,j-1] + h² * 2 * Gθ)")
-    print("   Переносим φ[i,j] в левую часть:")
-    print("        -4φ[i,j] + φ[i+1,j] + φ[i-1,j] + φ[i,j+1] + φ[i,j-1] = -h² * 2 * Gθ")
-    print("   Или, для удобства:")
-    print("        φ[i,j] = 1/4 * (φ[i+1,j] + φ[i-1,j] + φ[i,j+1] + φ[i,j-1]) + (h² * Gθ / 2)")
-
-    # Находим внутренние узлы
-    internal_nodes, node_to_index = find_internal_nodes_for_triangle(X, Y, L, angle_deg)
-    n = len(internal_nodes)
+    L = 2.0  # длина двух сторон
+    angle_deg = 120  # угол между сторонами длиной 2
     
-    if n == 0:
-        print("   Внутренних узлов не найдено.")
-        return None, None, None
-
-    A = np.zeros((n, n))
-    b = np.full(n, (h**2 * G_theta) / 2)  # Правая часть: h² * Gθ / 2
-
-    # Заполняем матрицу A
-    for idx, (i, j) in enumerate(internal_nodes):
-        A[idx, idx] = 1.0  # Диагональный элемент
-
-        # Проверяем соседей: право (i+1, j)
-        if (i+1, j) in node_to_index:
-            A[idx, node_to_index[(i+1, j)]] = -0.25
-
-        # Лево (i-1, j)
-        if (i-1, j) in node_to_index:
-            A[idx, node_to_index[(i-1, j)]] = -0.25
-
-        # Верх (i, j+1)
-        if (i, j+1) in node_to_index:
-            A[idx, node_to_index[(i, j+1)]] = -0.25
-
-        # Низ (i, j-1)
-        if (i, j-1) in node_to_index:
-            A[idx, node_to_index[(i, j-1)]] = -0.25
-
-    print(f"\n   Матрица коэффициентов A (размер {n}x{n}):")
-    for i in range(n):
-        row_str = " ".join([f"{A[i, j]:6.3f}" for j in range(n)])
-        print(f"   Строка {i}: {row_str} | b[{i}] = {b[i]:.3f}")
-
-    return A, b, node_to_index
-
-def solve_poisson_detailed(h, epsilon, G_theta, L, angle_deg=120):
-    """
-    Решает уравнение Пуассона в равнобедренном треугольнике.
-    Уравнение: Δφ = -2Gθ
-    """
-    # Параметры треугольника
+    # Вершины треугольника:
+    # A - вершина с углом 120°
+    # AB = AC = 2 (стороны, образующие угол 120°)
+    # BC - третья сторона (противоположная углу 120°)
+    
+    A = (0, 0)  # вершина с углом 120°
+    
+    # Сторона AB длиной 2 вдоль оси x
+    B = (L, 0)
+    
+    # Сторона AC длиной 2 под углом 120° от AB
     angle_rad = radians(angle_deg)
-    height = 2 * sin(angle_rad/2)  # Высота треугольника
+    C = (L * cos(angle_rad), L * sin(angle_rad))
     
-    # Ограничивающая прямоугольная область
-    Lx, Ly = L, height
-    nx = int(Lx / h) + 1
-    ny = int(Ly / h) + 1
-    x = np.linspace(0, Lx, nx)
-    y = np.linspace(0, Ly, ny)
+    # Вычисляем длину третьей стороны BC
+    BC_length = sqrt((C[0] - B[0])**2 + (C[1] - B[1])**2)
+    
+    print(f"Параметры тупоугольного треугольника:")
+    print(f"  Стороны: AB = {L}, AC = {L}, угол A = {angle_deg}°")
+    print(f"  Третья сторона BC = {BC_length:.4f}")
+    print(f"  Вершины: A{A}, B{B}, C{C}")
+    
+    # Создаем сетку, охватывающую треугольник
+    x_min, x_max = min(A[0], B[0], C[0]), max(A[0], B[0], C[0])
+    y_min, y_max = min(A[1], B[1], C[1]), max(A[1], B[1], C[1])
+    
+    nx = int((x_max - x_min) / h) + 1
+    ny = int((y_max - y_min) / h) + 1
+    x = np.linspace(x_min, x_max, nx)
+    y = np.linspace(y_min, y_max, ny)
     X, Y = np.meshgrid(x, y)
-
-    # Координаты вершин треугольника
-    A = (0, 0)           # Левая нижняя вершина
-    B = (L, 0)           # Правая нижняя вершина  
-    C = (L/2, height)    # Верхняя вершина
-
+    
+    # Маска для треугольника
+    triangle_mask = np.zeros_like(X, dtype=bool)
+    for i in range(nx):
+        for j in range(ny):
+            triangle_mask[j, i] = point_in_triangle(X[j, i], Y[j, i], A, B, C)
+    
+    # Маска для границы L (сторона AB длиной 2)
+    boundary_mask = np.zeros_like(X, dtype=bool)
+    for i in range(nx):
+        for j in range(ny):
+            if triangle_mask[j, i]:
+                # Проверяем, близко ли к стороне AB
+                dist_to_AB = abs(Y[j, i])  # AB лежит на оси y=0
+                if dist_to_AB < 0.1*h:
+                    boundary_mask[j, i] = True
+    
     # Инициализация решения
     phi = np.zeros((ny, nx))
-
+    
     print(f"\n1. ПОСТРОЕНИЕ СЕТКИ:")
-    print(f"   Размер ограничивающей области: [{0}, {Lx}] x [{0}, {Ly}]")
+    print(f"   Область: тупоугольный треугольник")
+    print(f"   Стороны: AB = {L}, AC = {L}, угол A = {angle_deg}°")
+    print(f"   Третья сторона: BC = {BC_length:.4f}")
     print(f"   Шаг h = {h}")
     print(f"   Количество узлов: nx = {nx}, ny = {ny}")
-    print(f"   Параметры треугольника:")
-    print(f"     - Основание: L = {L}")
-    print(f"     - Боковые стороны: 2")
-    print(f"     - Угол при вершине: {angle_deg}°")
-    print(f"     - Высота: {height:.3f}")
-
-    # --- Задание граничных условий ---
-    print(f"\n2. ЗАДАНИЕ ГРАНИЧНЫХ УСЛОВИЙ φ(x, y) = 0 на границе треугольника:")
+    print(f"   Узлов в области: {np.sum(triangle_mask)}")
     
-    # Обнуляем все значения
-    phi.fill(0)
+    # --- Граничные условия ---
+    print(f"\n2. ЗАДАНИЕ ГРАНИЧНЫХ УСЛОВИЙ:")
+    print(f"   φ = 0 на стороне L (AB длиной 2)")
+    print(f"   ∂φ/∂n = 0 на сторонах AC и BC")
     
-    # Устанавливаем граничные условия только на границах треугольника
-    for j in range(ny):
-        for i in range(nx):
-            x_val, y_val = X[j, i], Y[j, i]
-            
-            # Проверка на границу треугольника
-            if is_on_triangle_boundary(x_val, y_val, A, B, C):
-                phi[j, i] = 0.0
-
-    print(f"   - Все границы треугольника: φ = 0")
-
-    # --- Внутренние узлы: итерационный процесс ---
-    print(f"\n3. ИТЕРАЦИОННЫЙ ПРОЦЕСС (метод простой итерации):")
+    # Устанавливаем граничные условия на стороне L (AB)
+    phi[boundary_mask] = 0.0
+    
+    # --- Итерационный процесс ---
+    print(f"\n3. ИТЕРАЦИОННЫЙ ПРОЦЕСС:")
     print(f"   Критерий сходимости: max|φ_new - φ_old| < ε = {epsilon}")
-    print(f"   Максимальное число итераций: 10000")
-    print(f"   Уравнение Пуассона: Δφ = -2Gθ = -{2*G_theta}")
-    print(f"   Формула обновления для внутреннего узла (i,j):")
-    print(f"        φ[i,j] = 0.25 * (φ[i+1,j] + φ[i-1,j] + φ[i,j+1] + φ[i,j-1] + h² * 2 * Gθ)")
-    print(f"   (Применяется только внутри треугольника)")
-
+    print(f"   Уравнение: Δφ = -Gθ = -{G_theta}")
+    print(f"   Формула обновления для внутренних узлов:")
+    print(f"        φ[i,j] = 0.25 * (φ[i+1,j] + φ[i-1,j] + φ[i,j+1] + φ[i,j-1] + h² * Gθ)")
+    
     max_iter = 10000
     iteration_data = []
-
+    
     for it in range(max_iter):
         phi_old = phi.copy()
-        # Обновление внутренних узлов
+        
+        # Обновление только внутренних узлов треугольника
         for i in range(1, nx-1):
             for j in range(1, ny-1):
-                # Проверка, находится ли узел внутри треугольника
-                if is_point_in_triangle(X[j, i], Y[j, i], A, B, C):
-                    phi[j, i] = 0.25 * (
-                        phi[j, i+1] + phi[j, i-1] +
-                        phi[j+1, i] + phi[j-1, i] +
-                        h**2 * 2.0 * G_theta
-                    )
-
+                if triangle_mask[j, i] and not boundary_mask[j, i]:
+                    # Проверяем, что соседи внутри треугольника
+                    neighbors = []
+                    weights = []
+                    
+                    # Право (i+1, j)
+                    if triangle_mask[j, i+1]:
+                        neighbors.append(phi[j, i+1])
+                        weights.append(1.0)
+                    
+                    # Лево (i-1, j)
+                    if triangle_mask[j, i-1]:
+                        neighbors.append(phi[j, i-1])
+                        weights.append(1.0)
+                    
+                    # Верх (i, j+1)
+                    if triangle_mask[j+1, i]:
+                        neighbors.append(phi[j+1, i])
+                        weights.append(1.0)
+                    
+                    # Низ (i, j-1)
+                    if triangle_mask[j-1, i]:
+                        neighbors.append(phi[j-1, i])
+                        weights.append(1.0)
+                    
+                    if len(neighbors) > 0:
+                        phi[j, i] = (sum(neighbors) + h**2 * G_theta) / len(neighbors)
+        
         iteration_data.append(phi.copy())
-
+        
         # Проверка сходимости
-        diff = np.max(np.abs(phi - phi_old))
+        diff = np.max(np.abs(phi[triangle_mask] - phi_old[triangle_mask]))
         if diff < epsilon:
             print(f"   Сходимость достигнута на итерации {it+1}. Макс. разность = {diff:.6f}")
             break
-
-        # Вывод прогресса каждые 100 итераций
-        if (it + 1) % 100 == 0:
+            
+        if (it + 1) % 500 == 0:
             print(f"   Итерация {it+1}: max|Δφ| = {diff:.6f}")
-
+    
     if it == max_iter - 1:
-        print(f"   Предупреждение: Достигнуто максимальное число итераций ({max_iter}). Точность {epsilon} не достигнута.")
-
+        print(f"   Достигнуто максимальное число итераций ({max_iter})")
+    
+    # Статистика только по области решения
+    phi_in_domain = phi[triangle_mask]
     print(f"\n4. РЕЗУЛЬТАТЫ:")
-    print(f"   Решение сошлось за {it+1} итераций.")
+    print(f"   Итераций: {it+1}")
+    print(f"   φ_min = {np.min(phi_in_domain):.6f}")
+    print(f"   φ_max = {np.max(phi_in_domain):.6f}")
+    print(f"   Узлов в области: {np.sum(triangle_mask)}")
     
-    # Вычисляем min/max только для внутренних точек треугольника
-    triangle_phi = []
-    for j in range(ny):
-        for i in range(nx):
-            if is_point_in_triangle(X[j, i], Y[j, i], A, B, C):
-                triangle_phi.append(phi[j, i])
+    return X, Y, phi, it+1, iteration_data, triangle_mask, boundary_mask, A, B, C
+
+def plot_obtuse_triangle(L=2, angle_deg=120):
+    """Визуализация тупоугольного треугольника с двумя сторонами по 2 и углом 120°"""
+    angle_rad = radians(angle_deg)
     
-    if triangle_phi:
-        phi_min, phi_max = min(triangle_phi), max(triangle_phi)
-        print(f"   Минимальное значение φ внутри треугольника: {phi_min:.6f}")
-        print(f"   Максимальное значение φ внутри треугольника: {phi_max:.6f}")
-    else:
-        print(f"   Внутренних точек треугольника не найдено")
-
-    return X, Y, phi, it+1, iteration_data, y, nx, x, A, B, C
-
-def is_on_triangle_boundary(x, y, A, B, C, tol=1e-10):
-    """
-    Проверяет, находится ли точка на границе треугольника.
-    """
-    x1, y1 = A
-    x2, y2 = B
-    x3, y3 = C
+    # Вершины треугольника
+    A = (0, 0)
+    B = (L, 0)
+    C = (L * cos(angle_rad), L * sin(angle_rad))
     
-    # Проверка на стороне AB
-    if abs((y - y1) * (x2 - x1) - (x - x1) * (y2 - y1)) < tol and min(x1, x2) - tol <= x <= max(x1, x2) + tol:
-        return True
-        
-    # Проверка на стороне BC  
-    if abs((y - y2) * (x3 - x2) - (x - x2) * (y3 - y2)) < tol and min(x2, x3) - tol <= x <= max(x2, x3) + tol:
-        return True
-        
-    # Проверка на стороне CA
-    if abs((y - y3) * (x1 - x3) - (x - x3) * (y1 - y3)) < tol and min(x3, x1) - tol <= x <= max(x3, x1) + tol:
-        return True
-        
-    return False
-
-def create_comparison_table(phi1, phi2, h1, h2, X1, Y1, A, B, C):
-    """Создает таблицу сравнения значений φ в общих узлах внутри треугольника."""
-    print(f"\n5. СРАВНЕНИЕ РЕШЕНИЙ В ОБЩИХ УЗЛАХ (h={h1} и h={h2}):")
-    nx1 = phi1.shape[1]
-    ny1 = phi1.shape[0]
-    ratio = int(h1 / h2)  # Соотношение шагов
-
-    data = []
-    for j in range(ny1):
-        for i in range(nx1):
-            x_val, y_val = X1[j, i], Y1[j, i]
-            # Сравниваем только точки внутри треугольника
-            if is_point_in_triangle(x_val, y_val, A, B, C):
-                val1 = phi1[j, i]
-                val2 = phi2[j * ratio, i * ratio]
-                abs_diff = abs(val1 - val2)
-                data.append([x_val, y_val, val1, val2, abs_diff])
-
-    if not data:
-        print("   Нет общих узлов внутри треугольника для сравнения")
-        return None, 0, 0
-
-    df = pd.DataFrame(data, columns=['x', 'y', f'φ (h={h1})', f'φ (h={h2})', 'Абс. Разность'])
-    print(df.to_string(index=False, float_format="{:,.4f}".format))
-
-    max_diff = df['Абс. Разность'].max()
-    avg_diff = df['Абс. Разность'].mean()
-    print(f"\n   Максимальная абсолютная разность: {max_diff:.6f}")
-    print(f"   Средняя абсолютная разность: {avg_diff:.6f}")
-
-    return df, max_diff, avg_diff
-
-def plot_triangle(A, B, C, ax, color='blue', linewidth=2):
-    """Рисует треугольник на графике."""
-    vertices = np.array([A, B, C, A])  # Замыкаем треугольник
-    ax.plot(vertices[:, 0], vertices[:, 1], color=color, linewidth=linewidth)
+    plt.figure(figsize=(10, 8))
+    
+    # Рисуем треугольник
+    vertices = np.array([A, B, C, A])
+    plt.plot(vertices[:, 0], vertices[:, 1], 'b-', linewidth=2)
+    
+    # Закрашиваем область
+    plt.fill(vertices[:, 0], vertices[:, 1], 'lightblue', alpha=0.5, label='Область решения')
+    
+    # Подписываем стороны
+    plt.plot([A[0], B[0]], [A[1], B[1]], 'r-', linewidth=3, label='Сторона L (φ=0)')
+    plt.plot([A[0], C[0]], [A[1], C[1]], 'g--', linewidth=2, label='Остальные стороны (∂φ/∂n=0)')
+    plt.plot([B[0], C[0]], [B[1], C[1]], 'g--', linewidth=2)
+    
+    # Подписываем вершины
+    plt.text(A[0]-0.1, A[1]-0.1, 'A', fontsize=12, ha='right')
+    plt.text(B[0]+0.1, B[1]-0.1, 'B', fontsize=12, ha='left')
+    plt.text(C[0], C[1]+0.1, 'C', fontsize=12, ha='center')
+    
+    # Показываем длины сторон и углы
+    plt.text(L/2, -0.1, f'L={L}', ha='center', va='top')
+    plt.text(L*cos(angle_rad)/3, L*sin(angle_rad)/3, f'L={L}', rotation=angle_deg, ha='center', va='center')
+    
+    # Показываем угол 120°
+    angle_points = 30
+    angle_theta = np.linspace(0, angle_rad, angle_points)
+    angle_x = 0.3 * np.cos(angle_theta)
+    angle_y = 0.3 * np.sin(angle_theta)
+    plt.plot(angle_x, angle_y, 'k-', linewidth=1)
+    plt.text(0.2*cos(angle_rad/2), 0.2*sin(angle_rad/2), f'{angle_deg}°', ha='center', va='center')
+    
+    plt.title(f'Тупоугольный треугольник\nAB=AC={L}, угол A={angle_deg}°, Gθ=6', fontsize=14)
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.axis('equal')
+    plt.xlim(-0.5, L+0.5)
+    plt.ylim(-0.5, L+0.5)
+    plt.show()
 
 # --- ОСНОВНОЕ ВЫПОЛНЕНИЕ ---
+G_theta = 6
+epsilon = 0.001
 
-# Параметры из картинки
-G_theta = 6.0    # Gθ = 6
-L = 2.0          # Основание треугольника L = 2
-angle_deg = 120  # Угол при вершине 120°
-epsilon = 0.1
+print("=" * 80)
+print("РЕШЕНИЕ УРАВНЕНИЯ ПУАССОНА В ТУПОУГОЛЬНОМ ТРЕУГОЛЬНИКЕ")
+print("Уравнение: Δφ = -Gθ")
+print(f"Параметры: Gθ = {G_theta}, ε = {epsilon}")
+print("Область: тупоугольный треугольник с двумя сторонами по 2 и углом 120° между ними")
+print("Граничные условия: φ = 0 на стороне L (AB), ∂φ/∂n = 0 на других сторонах")
+print("=" * 80)
 
-# Вычисляем высоту треугольника
-angle_rad = radians(angle_deg)
-height = 2 * sin(angle_rad/2)
+# Визуализация области
+plot_obtuse_triangle()
 
-print("=" * 70)
-print("РЕШЕНИЕ УРАВНЕНИЯ ПУАССОНА В РАВНОБЕДРЕННОМ ТРЕУГОЛЬНИКЕ")
-print("ПО УСЛОВИЯМ С КАРТИНКИ")
-print("=" * 70)
-print(f"ПАРАМЕТРЫ ЗАДАЧИ:")
-print(f"  - Gθ = {G_theta}")
-print(f"  - Основание треугольника L = {L}")
-print(f"  - Боковые стороны = 2")
-print(f"  - Угол при вершине = {angle_deg}°")
-print(f"  - Высота треугольника = {height:.3f}")
-print(f"  - Уравнение: Δφ = -2Gθ = -{2*G_theta}")
-print(f"  - Граничные условия: φ = 0 на всей границе треугольника")
-print(f"  - Точность ε = {epsilon}")
+# Решение с разными шагами
+X1, Y1, phi1, iter1, iter_data1, triangle_mask1, boundary_mask1, A, B, C = solve_poisson_obtuse_triangle(0.5, epsilon, G_theta)
+X2, Y2, phi2, iter2, iter_data2, triangle_mask2, boundary_mask2, A, B, C = solve_poisson_obtuse_triangle(0.25, epsilon, G_theta)
 
-# --- Решение с шагом h = 0.5 ---
-print("\n" + "="*50)
-print("РЕШЕНИЕ ДЛЯ h = 0.5")
-print("="*50)
-X1, Y1, phi1, iter1, iteration_data1, y1, nx1, x1, A, B, C = solve_poisson_detailed(
-    0.5, epsilon, G_theta, L, angle_deg)
+def create_comparison_table_triangle(phi1, phi2, X1, Y1, X2, Y2, domain_mask1, domain_mask2):
+    """Сравнение решений в общих узлах для треугольной области"""
+    print(f"\n5. СРАВНЕНИЕ РЕШЕНИЙ:")
+    
+    # Находим общие узлы внутри области
+    common_points = []
+    for i in range(X1.shape[1]):
+        for j in range(X1.shape[0]):
+            if domain_mask1[j, i]:
+                # Находим ближайший узел во второй сетке
+                dist = np.sqrt((X2 - X1[j, i])**2 + (Y2 - Y1[j, i])**2)
+                min_idx = np.unravel_index(np.argmin(dist), X2.shape)
+                
+                if domain_mask2[min_idx]:
+                    val1 = phi1[j, i]
+                    val2 = phi2[min_idx]
+                    abs_diff = abs(val1 - val2)
+                    common_points.append([X1[j, i], Y1[j, i], val1, val2, abs_diff])
+    
+    df = pd.DataFrame(common_points, columns=['x', 'y', 'φ (h=0.5)', 'φ (h=0.25)', 'Абс. Разность'])
+    
+    if len(df) > 0:
+        print(f"   Сравнение в {len(df)} общих точках:")
+        print(df.head(10).to_string(index=False, float_format="%.4f"))
+        if len(df) > 10:
+            print("   ... (показаны первые 10 строк)")
+        
+        max_diff = df['Абс. Разность'].max()
+        avg_diff = df['Абс. Разность'].mean()
+        print(f"\n   Максимальная разность: {max_diff:.6f}")
+        print(f"   Средняя разность: {avg_diff:.6f}")
+    else:
+        print("   Общие точки для сравнения не найдены")
+        max_diff, avg_diff = 0, 0
+    
+    return df, max_diff, avg_diff
 
-# --- Построение матрицы системы (для h=0.5) ---
-A_matrix, b, node_to_index = build_system_matrix(0.5, G_theta, X1, Y1, L, angle_deg)
+# Сравнение решений
+comparison_df, max_diff, avg_diff = create_comparison_table_triangle(phi1, phi2, X1, Y1, X2, Y2, triangle_mask1, triangle_mask2)
 
-# --- Решение с шагом h = 0.25 ---
-print("\n" + "="*50)
-print("РЕШЕНИЕ ДЛЯ h = 0.25")
-print("="*50)
-X2, Y2, phi2, iter2, iteration_data2, y2, nx2, x2, A2, B2, C2 = solve_poisson_detailed(
-    0.25, epsilon, G_theta, L, angle_deg)
+# --- ВИЗУАЛИЗАЦИЯ РЕЗУЛЬТАТОВ ---
+plt.figure(figsize=(20, 12))
 
-# --- Сравнение решений ---
-comparison_df, max_diff, avg_diff = create_comparison_table(phi1, phi2, 0.5, 0.25, X1, Y1, A, B, C)
-
-# --- ВИЗУАЛИЗАЦИЯ ---
-plt.figure(figsize=(18, 14))
+# Вершины для отрисовки
+vertices = np.array([A, B, C, A])
 
 # График 1: Область (треугольник) и сетка (h=0.5)
 plt.subplot(2, 3, 1)
-plot_triangle(A, B, C, plt.gca(), color='blue', linewidth=3)
-plt.scatter(X1, Y1, color='gray', s=20, marker='o', label='Узлы сетки', alpha=0.6)
+# Создаем маску для треугольника
+triangle_area = np.zeros_like(X1, dtype=bool)
+for i in range(X1.shape[1]):
+    for j in range(X1.shape[0]):
+        triangle_area[j, i] = point_in_triangle(X1[j, i], Y1[j, i], A, B, C)
 
-# Закрашиваем внутреннюю область треугольника
-triangle_points = np.array([A, B, C])
-plt.fill(triangle_points[:, 0], triangle_points[:, 1], 'lightblue', alpha=0.4)
-
-plt.title(f'Равнобедренный треугольник и сетка (h=0.5)\nL={L}, стороны=2, угол={angle_deg}°', fontsize=12)
+plt.contourf(X1, Y1, triangle_area.astype(int), levels=[-0.5, 0.5, 1.5], colors=['white', 'lightblue'], alpha=0.6)
+plt.contour(X1, Y1, triangle_area.astype(int), levels=[0.5], colors='blue', linewidths=2)
+plt.scatter(X1, Y1, color='gray', s=20, marker='o', label='Узлы сетки')
+plt.title('Область (треугольник) и сетка (h=0.5)', fontsize=12)
 plt.xlabel('x')
 plt.ylabel('y')
 plt.legend()
 plt.grid(True, alpha=0.3)
 plt.axis('equal')
+plt.xlim(min(A[0], B[0], C[0])-0.1, max(A[0], B[0], C[0])+0.1)
+plt.ylim(min(A[1], B[1], C[1])-0.1, max(A[1], B[1], C[1])+0.1)
 
-# График 2: Решение для h = 0.5
+
+# График 2: Решение для h=0.5
 plt.subplot(2, 3, 2)
-# Создаем маску для треугольника
-mask_triangle = np.zeros_like(phi1, dtype=bool)
-for j in range(phi1.shape[0]):
-    for i in range(phi1.shape[1]):
-        mask_triangle[j, i] = is_point_in_triangle(X1[j, i], Y1[j, i], A, B, C)
-
-# Отображаем только значения внутри треугольника
-phi1_masked = np.ma.masked_where(~mask_triangle, phi1)
+phi1_masked = np.where(triangle_mask1, phi1, np.nan)
 contour1 = plt.contourf(X1, Y1, phi1_masked, levels=20, cmap='viridis')
 plt.colorbar(contour1, label='φ(x, y)')
-plot_triangle(A, B, C, plt.gca(), color='black', linewidth=2)
-plt.title(f'Решение φ(x,y) для h = 0.5\n(Итераций: {iter1})', fontsize=12)
+plt.contour(X1, Y1, phi1_masked, levels=10, colors='black', alpha=0.3)
+plt.plot(vertices[:, 0], vertices[:, 1], 'b-', linewidth=1)
+plt.plot([A[0], B[0]], [A[1], B[1]], 'r-', linewidth=2)
+plt.title(f'Решение φ(x,y) для h=0.5\n(Итераций: {iter1})', fontsize=12)
 plt.xlabel('x')
 plt.ylabel('y')
-plt.grid(True, alpha=0.3)
+plt.axis('equal')
 
-# График 3: Решение для h = 0.25
+# График 3: Решение для h=0.25
 plt.subplot(2, 3, 3)
-mask_triangle2 = np.zeros_like(phi2, dtype=bool)
-for j in range(phi2.shape[0]):
-    for i in range(phi2.shape[1]):
-        mask_triangle2[j, i] = is_point_in_triangle(X2[j, i], Y2[j, i], A, B, C)
-
-phi2_masked = np.ma.masked_where(~mask_triangle2, phi2)
+phi2_masked = np.where(triangle_mask2, phi2, np.nan)
 contour2 = plt.contourf(X2, Y2, phi2_masked, levels=20, cmap='viridis')
 plt.colorbar(contour2, label='φ(x, y)')
-plot_triangle(A, B, C, plt.gca(), color='black', linewidth=2)
-plt.title(f'Решение φ(x,y) для h = 0.25\n(Итераций: {iter2})', fontsize=12)
+plt.contour(X2, Y2, phi2_masked, levels=10, colors='black', alpha=0.3)
+plt.plot(vertices[:, 0], vertices[:, 1], 'b-', linewidth=1)
+plt.plot([A[0], B[0]], [A[1], B[1]], 'r-', linewidth=2)
+plt.title(f'Решение φ(x,y) для h=0.25\n(Итераций: {iter2})', fontsize=12)
 plt.xlabel('x')
 plt.ylabel('y')
+plt.axis('equal')
+
+# График 4: Разность решений
+plt.subplot(2, 3, 4)
+from scipy.interpolate import griddata
+points1 = np.column_stack([X1[triangle_mask1], Y1[triangle_mask1]])
+values1 = phi1[triangle_mask1]
+points2 = np.column_stack([X2[triangle_mask2], Y2[triangle_mask2]])
+phi1_interp = griddata(points1, values1, points2, method='linear')
+
+diff = np.abs(phi1_interp - phi2[triangle_mask2])
+diff_plot = np.full_like(phi2, np.nan)
+diff_plot[triangle_mask2] = diff
+
+im = plt.contourf(X2, Y2, diff_plot, levels=20, cmap='hot')
+plt.colorbar(im, label='|Δφ|')
+plt.plot(vertices[:, 0], vertices[:, 1], 'b-', linewidth=1)
+plt.plot([A[0], B[0]], [A[1], B[1]], 'r-', linewidth=2)
+plt.title(f'Абсолютная разность решений\nМакс. = {max_diff:.4f}', fontsize=12)
+plt.xlabel('x')
+plt.ylabel('y')
+plt.axis('equal')
+
+# График 5: Сходимость
+plt.subplot(2, 3, 5)
+diffs1 = [np.max(np.abs(iter_data1[i] - iter_data1[i-1])) 
+          for i in range(1, len(iter_data1))]
+diffs2 = [np.max(np.abs(iter_data2[i] - iter_data2[i-1])) 
+          for i in range(1, len(iter_data2))]
+
+plt.semilogy(range(1, len(diffs1)+1), diffs1, 'b-', label=f'h=0.5 ({len(diffs1)} итер.)')
+plt.semilogy(range(1, len(diffs2)+1), diffs2, 'r--', label=f'h=0.25 ({len(diffs2)} итер.)')
+plt.axhline(y=epsilon, color='green', linestyle=':', label=f'ε={epsilon}')
+plt.xlabel('Номер итерации')
+plt.ylabel('Макс. |Δφ|')
+plt.title('Сходимость итерационного процесса', fontsize=12)
+plt.legend()
 plt.grid(True, alpha=0.3)
 
-# График 4: Разность решений в общих узлах
-plt.subplot(2, 3, 4)
-if comparison_df is not None:
-    # Создаем сетку для разности
-    Z_diff = np.zeros_like(phi1)
-    Z_diff.fill(np.nan)  # Заполняем NaN для точек вне треугольника
-    
-    for j in range(phi1.shape[0]):
-        for i in range(phi1.shape[1]):
-            if is_point_in_triangle(X1[j, i], Y1[j, i], A, B, C):
-                Z_diff[j, i] = abs(phi1[j, i] - phi2[j*2, i*2])
-    
-    im = plt.contourf(X1, Y1, Z_diff, levels=20, cmap='hot')
-    plt.colorbar(im, label='|Δφ|')
-    plot_triangle(A, B, C, plt.gca(), color='black', linewidth=2)
-    plt.title(f'Абсолютная разность |φ_h=0.5 - φ_h=0.25|\nМакс. = {max_diff:.4f}', fontsize=12)
-    plt.xlabel('x')
-    plt.ylabel('y')
-else:
-    plt.text(0.5, 0.5, 'Нет данных для сравнения', 
-             ha='center', va='center', transform=plt.gca().transAxes)
+# График 6: Область (треугольник) и сетка (h=0.25)
+plt.subplot(2, 3, 6)
+# Создаем маску для треугольника
+triangle_area = np.zeros_like(X2, dtype=bool)
+for i in range(X2.shape[1]):
+    for j in range(X2.shape[0]):
+        triangle_area[j, i] = point_in_triangle(X2[j, i], Y2[j, i], A, B, C)
 
-# График 5: Область (треугольник) и сетка (h=0.25)
-plt.subplot(2, 3, 5)
-plot_triangle(A, B, C, plt.gca(), color='blue', linewidth=3)
-plt.scatter(X2, Y2, color='gray', s=10, marker='o', label='Узлы сетки', alpha=0.6)
-plt.fill(triangle_points[:, 0], triangle_points[:, 1], 'lightblue', alpha=0.4)
-plt.title(f'Равнобедренный треугольник и сетка (h=0.25)\nL={L}, стороны=2, угол={angle_deg}°', fontsize=12)
+plt.contourf(X2, Y2, triangle_area.astype(int), levels=[-0.5, 0.5, 1.5], colors=['white', 'lightblue'], alpha=0.6)
+plt.contour(X2, Y2, triangle_area.astype(int), levels=[0.5], colors='blue', linewidths=2)
+
+# Узлы сетки с шагом 0.25
+x_nodes = np.arange(-1.0, 2.1, 0.25)
+y_nodes = np.arange(-1.0, 2.1, 0.25)
+X_nodes, Y_nodes = np.meshgrid(x_nodes, y_nodes)
+
+# Отображаем только узлы внутри треугольника
+for i in range(13):
+    for j in range(13):
+        if point_in_triangle(X_nodes[j, i], Y_nodes[j, i], A, B, C):
+            plt.scatter(X_nodes[j, i], Y_nodes[j, i], color='gray', s=10, marker='o', alpha=0.7)
+
+plt.title('Область (треугольник) и сетка (h=0.25)', fontsize=12)
 plt.xlabel('x')
 plt.ylabel('y')
 plt.legend()
 plt.grid(True, alpha=0.3)
 plt.axis('equal')
-
-# График 6: Сходимость (макс. изменение на итерации)
-plt.subplot(2, 3, 6)
-# Для h=0.5
-diffs_h1 = []
-phi_prev = iteration_data1[0]
-for phi_next in iteration_data1[1:]:
-    diff = np.max(np.abs(phi_next - phi_prev))
-    diffs_h1.append(diff)
-    phi_prev = phi_next
-
-# Для h=0.25
-diffs_h2 = []
-phi_prev = iteration_data2[0]
-for phi_next in iteration_data2[1:]:
-    diff = np.max(np.abs(phi_next - phi_prev))
-    diffs_h2.append(diff)
-    phi_prev = phi_next
-
-plt.semilogy(range(1, len(diffs_h1)+1), diffs_h1, 'b-', label=f'h=0.5 (итераций: {len(diffs_h1)})')
-plt.semilogy(range(1, len(diffs_h2)+1), diffs_h2, 'r--', label=f'h=0.25 (итераций: {len(diffs_h2)})')
-plt.axhline(y=epsilon, color='green', linestyle='--', label=f'Точность ε={epsilon}')
-plt.xlabel('Номер итерации')
-plt.ylabel('Макс. |Δφ|')
-plt.title('Сходимость метода (логарифмическая шкала)', fontsize=12)
-plt.legend()
-plt.grid(True, alpha=0.3)
+plt.xlim(min(A[0], B[0], C[0])-0.1, max(A[0], B[0], C[0])+0.1)
+plt.ylim(min(A[1], B[1], C[1])-0.1, max(A[1], B[1], C[1])+0.1)
 
 plt.tight_layout()
 plt.show()
 
-# --- ИТОГОВЫЙ АНАЛИЗ И ВЫВОДЫ ---
-print(f"\n" + "="*70)
-print("ИТОГОВЫЙ АНАЛИЗ")
-print("="*70)
+# --- ИТОГОВЫЙ АНАЛИЗ ---
+print(f"\n6. ИТОГОВЫЙ АНАЛИЗ:")
+print(f"   Количество итераций:")
+print(f"     h=0.5: {iter1}")
+print(f"     h=0.25: {iter2}")
 
-print(f"\nКоличество итераций:")
-print(f"   - Для h = 0.5: {iter1} итераций")
-print(f"   - Для h = 0.25: {iter2} итераций")
-print("   Вывод: Уменьшение шага привело к увеличению числа итераций, что ожидаемо из-за роста числа узлов.")
+print(f"\n   Точность решения:")
+print(f"     Макс. разность: {max_diff:.6f}")
+print(f"     Средняя разность: {avg_diff:.6f}")
+print(f"     Заданная точность ε: {epsilon}")
 
-if comparison_df is not None:
-    print(f"\nТочность решения:")
-    print(f"   - Максимальная абсолютная разность в общих узлах: {max_diff:.6f}")
-    print(f"   - Средняя абсолютная разность в общих узлах: {avg_diff:.6f}")
-    if max_diff < epsilon:
-        print(f"   Вывод: Разность меньше заданной точности ε={epsilon}. Результат с h=0.5 приемлем.")
-    else:
-        print(f"   Вывод: Разность превышает заданную точность ε={epsilon}. Необходимо использовать меньший шаг (h=0.25 или меньше).")
+if max_diff < epsilon:
+    print(f"   ✓ Точность достигнута")
+else:
+    print(f"   ⚠ Точность не достигнута")
 
-print(f"\nЭкстремальные значения внутри треугольника:")
-# Для h=0.5
-triangle_phi1 = []
-for j in range(phi1.shape[0]):
-    for i in range(phi1.shape[1]):
-        if is_point_in_triangle(X1[j, i], Y1[j, i], A, B, C):
-            triangle_phi1.append(phi1[j, i])
+print(f"\n   Экстремальные значения φ в области:")
+phi1_domain = phi1[triangle_mask1]
+phi2_domain = phi2[triangle_mask2]
+print(f"     h=0.5:  min={np.min(phi1_domain):.4f}, max={np.max(phi1_domain):.4f}")
+print(f"     h=0.25: min={np.min(phi2_domain):.4f}, max={np.max(phi2_domain):.4f}")
 
-# Для h=0.25  
-triangle_phi2 = []
-for j in range(phi2.shape[0]):
-    for i in range(phi2.shape[1]):
-        if is_point_in_triangle(X2[j, i], Y2[j, i], A, B, C):
-            triangle_phi2.append(phi2[j, i])
-
-if triangle_phi1 and triangle_phi2:
-    phi1_min, phi1_max = min(triangle_phi1), max(triangle_phi1)
-    phi2_min, phi2_max = min(triangle_phi2), max(triangle_phi2)
-    print(f"   - Для h=0.5: φ ∈ [{phi1_min:.4f}, {phi1_max:.4f}]")
-    print(f"   - Для h=0.25: φ ∈ [{phi2_min:.4f}, {phi2_max:.4f}]")
-
-print(f"\n   Значения функции φ(x,y) в узлах сетки (h=0.5) внутри треугольника:")
-print("      x: ", end="")
-for i in range(nx1):
-    print(f"{x1[i]:5.1f} ", end="")
-print()
-for j in range(len(y1)-1, -1, -1):
-    print(f"y={y1[j]:4.1f}: ", end="")
-    for i in range(nx1):
-        if is_point_in_triangle(X1[j, i], Y1[j, i], A, B, C):
-            print(f"{phi1[j, i]:5.3f} ", end="")
-        else:
-            print("     - ", end="")
-    print()
-
-print(f"\n" + "="*70)
-print("РЕШЕНИЕ ЗАДАЧИ ДЛЯ РАВНОБЕДРЕННОГО ТРЕУГОЛЬНИКА ЗАВЕРШЕНО")
-print("ПАРАМЕТРЫ: Gθ = 6, L = 2, угол = 120°, стороны = 2")
-print("="*70)
-    
+print(f"\n   Параметры треугольника:")
+BC_length = sqrt((C[0] - B[0])**2 + (C[1] - B[1])**2)
+print(f"     Стороны: AB = 2, AC = 2, BC = {BC_length:.4f}")
+print(f"     Угол A = 120°")
+print(f"     Площадь: {0.5 * 2 * 2 * sin(radians(120)):.4f}")
